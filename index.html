@@ -101,13 +101,22 @@
     let users = [];
 
 async function loadUsers() {
-    try {
-        const res = await fetch("users.json");
-        users = await res.json();
-    } catch (e) {
-        console.error("无法加载用户数据");
-    }
+  try {
+    const [once, day, forever] = await Promise.all([
+      fetch("users_once.json").then(res => res.json()),
+      fetch("users_day.json").then(res => res.json()),
+      fetch("users_forever.json").then(res => res.json()),
+    ]);
+    users = [...once, ...day, ...forever];
+  } catch (e) {
+    console.error("无法加载用户数据", e);
+  }
 }
+
+function validateLogin(username, password) {
+  return users.some(user => user.username === username && user.password === password);
+}
+
 
 function validateLogin(username, password) {
     return users.some(user => user.username === username && user.password === password);
@@ -179,10 +188,29 @@ async function loadVideos() {
       pageVideos.forEach(v => {
         const div = document.createElement("div");
         div.className = "bg-white p-2 shadow rounded hover:shadow-lg transition cursor-pointer";
-        div.innerHTML = `<img src="${v.vod_pic}" class="w-full rounded mb-2"/><div class="text-sm">${v.vod_name}</div>`;
-        div.onclick = () => openVideoModal(v.vod_play_url);
-        container.appendChild(div);
-      });
+      div.innerHTML = `<img src="${v.vod_pic}" class="w-full rounded mb-2"/><div class="text-sm">${v.vod_name}</div>`;
+
+div.onclick = () => {
+  if (!isLoggedIn) {
+    openLoginModal();
+    return;
+  }
+
+  const user = users.find(u => u.username === currentUser);
+  if (!canPlay(user)) {
+    alert("您的账号播放权限已过期或已使用完");
+    return;
+  }
+
+  if (user.permission?.type === "once") {
+    localStorage.setItem(`user-${user.username}-used`, "true");
+  }
+
+  openVideoModal(v.vod_play_url);
+};
+
+container.appendChild(div);
+
       document.getElementById("currentPage").textContent = currentPage;
       document.getElementById("totalPage").textContent = Math.ceil(filtered.length / videosPerPage);
     }
@@ -271,20 +299,83 @@ function closeVideoModal() {
     }
     document.getElementById("closeLogin").onclick = closeLoginModal;
     document.getElementById("submitLogin").onclick = () => {
-    const u = document.getElementById("username").value;
-    const p = document.getElementById("password").value;
+  const u = document.getElementById("username").value;
+  const p = document.getElementById("password").value;
 
-    if (validateLogin(u, p)) {
-        isLoggedIn = true;
-        currentUser = u;
-        closeLoginModal();
-        alert("登录成功");
-        updateUserInfo();
-    } else {
-        document.getElementById("loginError").classList.remove("hidden");
+  if (validateLogin(u, p)) {
+    isLoggedIn = true;
+    currentUser = u;
+
+    const user = users.find(user => user.username === u);
+
+    // 如果是 "day" 权限，首次登录时记录时间
+    const loginKey = `user-${u}-startTime`;
+    if (user.permission?.type === "day" && !localStorage.getItem(loginKey)) {
+      localStorage.setItem(loginKey, new Date().toISOString());
     }
+
+    closeLoginModal();
+    alert("登录成功");
+    updateUserInfo(); // 更新用户名与权限标签
+
+    const infoContainer = document.getElementById("userInfo");
+    infoContainer.innerHTML = `
+      <span class="mr-2 text-white">${user.username}</span>
+      ${getPermissionLabel(user)}
+      <button onclick="handleAuthClick()" class="ml-4 bg-red-500 text-white rounded px-2 py-1 text-sm">退出</button>
+    `;
+  } else {
+    document.getElementById("loginError").classList.remove("hidden");
+  }
 };
 
+function canPlay(user) {
+  const type = user.permission?.type;
+  const key = `user-${user.username}-startTime`;
+
+  if (type === "forever") return true;
+
+  if (type === "once") {
+    const used = localStorage.getItem(`user-${user.username}-used`);
+    return used !== "true";
+  }
+
+  if (type === "day") {
+    const start = localStorage.getItem(key);
+    if (!start) return true;
+    const now = new Date();
+    const startDate = new Date(start);
+    return now - startDate < 24 * 60 * 60 * 1000;
+  }
+
+  return false;
+}
+
+function getPermissionLabel(user) {
+  const type = user.permission?.type;
+  const username = user.username;
+
+  if (type === "once") {
+    return `<span class="bg-gray-500 text-white px-2 py-1 rounded text-xs">试玩账号</span>`;
+  }
+
+  if (type === "day") {
+    const start = localStorage.getItem(`user-${username}-startTime`);
+    if (!start) return `<span class="bg-blue-500 text-white px-2 py-1 rounded text-xs">1天体验</span>`;
+    const now = new Date();
+    const startDate = new Date(start);
+    const msLeft = 24 * 60 * 60 * 1000 - (now - startDate);
+    if (msLeft <= 0) return `<span class="bg-gray-700 text-white px-2 py-1 rounded text-xs">已过期</span>`;
+    const hoursLeft = Math.floor(msLeft / (60 * 60 * 1000));
+    return `<span class="bg-blue-500 text-white px-2 py-1 rounded text-xs">剩余 ${hoursLeft} 小时</span>`;
+  }
+
+  if (type === "forever") {
+    return `<span class="bg-green-600 text-white px-2 py-1 rounded text-xs">永久会员</span>`;
+  }
+
+  return "";
+}
 
     // 防调试右键
     window.addEventListener("contextmenu", e => e.preventDefault());
